@@ -50,15 +50,16 @@ def test_loads_dumps(silent):
     assert Parent.loads(nancy.dumps()) == nancy 
 
 
-def test_load_dump(silent, tmpdir: Path):
+def test_load_dump_ambiguous_name(silent, tmpdir: Path):
     bob = Child("Bob")
     clarice = Child("Clarice")
     nancy = Parent("Nancy", children=dict(bob=bob, clarice=clarice))
     tmp_path = tmpdir / "tmp"
-    with open(tmp_path, "w") as fp:
-        nancy.dump(fp)
-    with open(tmp_path, "r") as fp:
-        assert Parent.load(fp) == nancy 
+    with pytest.raises(RuntimeError):
+        with open(tmp_path, "w") as fp:
+            nancy.dump(fp)
+        with open(tmp_path, "r") as fp:
+            assert Parent.load(fp) == nancy 
 
 
 @dataclass

@@ -15,8 +15,10 @@ import yaml
 
 from simple_parsing import field, mutable_field
 from simple_parsing.helpers import FrozenSerializable
+from simple_parsing.helpers import Serializable
 
 FrozenSerializable.subclasses.clear()
+Serializable.subclasses.clear()
 
 @dataclass(frozen=True)
 class Child(FrozenSerializable):

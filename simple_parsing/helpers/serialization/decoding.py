@@ -54,7 +54,7 @@ def decode_field(field: Field, raw_value: Any) -> Any:
     return get_decoding_fn(field_type)(raw_value)
 
 
-@lru_cache(maxsize=100)
+@lru_cache(maxsize=100, typed=True)
 def get_decoding_fn(t: Type[T]) -> Callable[[Any], T]:
     """Fetches/Creates a decoding function for the given type annotation. 
 
@@ -124,19 +124,31 @@ def get_decoding_fn(t: Type[T]) -> Callable[[Any], T]:
         return decode_union(*args)
 
     import typing_inspect as tpi
-    from .serializable import get_dataclass_type_from_forward_ref, Serializable
-
+    from .serializable import Serializable, get_dataclass_type_from_forward_ref
+    from .frozen_serializable import FrozenSerializable
+    
     if tpi.is_forward_ref(t):
-        dc = get_dataclass_type_from_forward_ref(t)
-        if dc is Serializable:
-            # Since dc is Serializable, this means that we found more than one
-            # matching dataclass the the given forward ref, and the right
-            # subclass will be determined based on the matching fields.
-            # Therefore we set drop_extra_fields=False.
-            return partial(dc.from_dict, drop_extra_fields=False)
-        if dc:
-            return dc.from_dict
-
+        serializable_classes = [Serializable, FrozenSerializable]
+        for serializable_class in serializable_classes: 
+            dc = get_dataclass_type_from_forward_ref(t, Serializable=serializable_class)
+            if dc is serializable_class:
+                # Since dc is Serializable or FrozenSerializable, this means
+                # that we found more than one matching dataclass the the given
+                # forward ref, and the right subclass will be determined based
+                # on the matching fields. Therefore we set
+                # drop_extra_fields=False.
+                return partial(dc.from_dict, drop_extra_fields=False)
+            if dc:
+                return dc.from_dict
+        if dc is None:
+            logger.warning(
+                f"Unable to find a corresponding type for forward ref "
+                f"{t} inside the registered subclasses of {Serializable} or of "
+                f"{FrozenSerializable}. \n"
+                f"(Consider adding {Serializable} as a base class to <{t}>? )."
+            )
+        
+        
     if tpi.is_typevar(t):
         bound = tpi.get_bound(t)
         logger.debug(f"Decoding a typevar: {t}, bound type is {bound}.")

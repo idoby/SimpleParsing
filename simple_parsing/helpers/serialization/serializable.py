@@ -147,7 +147,7 @@ class Serializable:
         """
         if drop_extra_fields is None:
             drop_extra_fields = not cls.decode_into_subclasses
-        return from_dict(cls, obj, drop_extra_fields=drop_extra_fields)
+        return from_dict(cls, obj, drop_extra_fields=drop_extra_fields, Serializable=Serializable)
 
     def dump(self, fp: IO[str], dump_fn=json.dump, **kwargs) -> None:
         # Convert `self` into a dict.
@@ -355,17 +355,18 @@ class SimpleSerializable(Serializable, decode_into_subclasses=True):
 def get_dataclass_type_from_forward_ref(forward_ref: Type, Serializable=Serializable) -> Optional[Type]:
     arg = tpi.get_forward_arg(forward_ref)
     potential_classes: List[Type] = []
-
+    
     for serializable_class in Serializable.subclasses:
         if serializable_class.__name__ == arg:
             potential_classes.append(serializable_class)
 
     if not potential_classes:
-        logger.warning(
-            f"Unable to find a corresponding type for forward ref "
-            f"{forward_ref} inside the registered {Serializable} subclasses. "
-            f"(Consider adding {Serializable} as a base class to <{arg}>? )."
-        )
+        # logger.warning(
+        #     f"Unable to find a corresponding type for forward ref "
+        #     f"{forward_ref} inside the registered {Serializable} subclasses. "
+        #     f"(Consider adding {Serializable} as a base class to <{arg}>? )."
+        # )
+        # logger.debug(f"all subclasses: {Serializable.subclasses}")
         return None
     elif len(potential_classes) > 1:
         logger.warning(
@@ -397,7 +398,7 @@ def get_actual_type(field_type: Type) -> Type:
     return field_type
 
 
-def from_dict(cls: Type[Dataclass], d: Dict[str, Any], drop_extra_fields: bool=None) -> Dataclass:
+def from_dict(cls: Type[Dataclass], d: Dict[str, Any], drop_extra_fields: bool=None, Serializable=Serializable) -> Dataclass:
     """Parses an instance of the dataclass `cls` from the dict `d`.
 
     Args:
@@ -509,6 +510,8 @@ def from_dict(cls: Type[Dataclass], d: Dict[str, Any], drop_extra_fields: bool=N
         instance = cls(**init_args)  # type: ignore
     except TypeError as e:
         # raise RuntimeError(f"Couldn't instantiate class {cls} using init args {init_args}.")
+        logger.debug(f"cls wants to be decoded into its subclasses: {cls.decode_into_subclasses}")
+        logger.debug(f"Extra args {extra_args}")
         raise RuntimeError(f"Couldn't instantiate class {cls} using init args {init_args.keys()}: {e}")
 
     for name, value in non_init_args.items():

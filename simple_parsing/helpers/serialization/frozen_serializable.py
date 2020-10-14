@@ -39,6 +39,7 @@ try:
 except ImportError:
     pass
 
+from .serializable import from_dict, get_init_fields, get_first_non_None_type
 
 @dataclass(frozen=True)
 class FrozenSerializable:
@@ -67,12 +68,11 @@ class FrozenSerializable:
 
     def __init_subclass__(cls, decode_into_subclasses: bool=None, add_variants: bool=True):
         logger.debug(f"Registering a new FrozenSerializable subclass: {cls}")
-        super().__init_subclass__()
         if decode_into_subclasses is None:
             # if decode_into_subclasses is None, we will use the value of the
             # parent class, if it is also a subclass of FrozenSerializable.
             # Skip the class itself as well as object.
-            parents = cls.mro()[1:-1] 
+            parents = cls.mro()[1:-1]
             logger.debug(f"parents: {parents}")
 
             for parent in parents:
@@ -80,6 +80,7 @@ class FrozenSerializable:
                     decode_into_subclasses = parent.decode_into_subclasses
                     logger.debug(f"Parent class {parent} has decode_into_subclasses = {decode_into_subclasses}")
                     break
+        super().__init_subclass__()
 
         cls.decode_into_subclasses = decode_into_subclasses or False
         if cls not in FrozenSerializable.subclasses:
@@ -147,7 +148,7 @@ class FrozenSerializable:
         """
         if drop_extra_fields is None:
             drop_extra_fields = not cls.decode_into_subclasses
-        return from_dict(cls, obj, drop_extra_fields=drop_extra_fields)
+        return from_dict(cls, obj, drop_extra_fields=drop_extra_fields, Serializable=FrozenSerializable)
 
     def dump(self, fp: IO[str], dump_fn=json.dump, **kwargs) -> None:
         # Convert `self` into a dict.
@@ -348,14 +349,14 @@ class FrozenSerializable:
 
 
 @dataclass(frozen=True)
-class SimpleSerializable(FrozenSerializable, decode_into_subclasses=True):
+class SimpleFrozenSerializable(FrozenSerializable, decode_into_subclasses=True):
     pass
 
 
 def get_dataclass_type_from_forward_ref(forward_ref: Type, FrozenSerializable=FrozenSerializable) -> Optional[Type]:
     arg = tpi.get_forward_arg(forward_ref)
     potential_classes: List[Type] = []
-
+    
     for serializable_class in FrozenSerializable.subclasses:
         if serializable_class.__name__ == arg:
             potential_classes.append(serializable_class)
@@ -395,192 +396,3 @@ def get_actual_type(field_type: Type) -> Type:
         if dc is not None:
             field_type = dc
     return field_type
-
-
-def from_dict(cls: Type[Dataclass], d: Dict[str, Any], drop_extra_fields: bool=None) -> Dataclass:
-    """Parses an instance of the dataclass `cls` from the dict `d`.
-
-    Args:
-        cls (Type[Dataclass]): A `dataclass` type.
-        d (Dict[str, Any]): A dictionary of `raw` values, obtained for example
-            when deserializing a json file into an instance of class `cls`. 
-        drop_extra_fields (bool, optional): Wether or not to drop extra
-            dictionary keys (dataclass fields) when encountered. There are three
-            options:
-            - True:
-                The extra keys are dropped, and this function returns an
-                instance of `cls`.
-            - False:
-                The extra keys (if any) are kept, and we search through the
-                subclasses of `cls` for the first dataclass which has all the
-                required fields. 
-            - None (default):
-                `drop_extra_fields = not cls.decode_into_subclasses`.
-
-    Raises:
-        RuntimeError: If an error is encountered while instantiating the class.
-
-    Returns:
-        Dataclass: An instance of the dataclass `cls`.
-    """
-    if d is None:
-        return None
-    if isinstance(d, cls):
-        return d
-    obj_dict: Dict[str, Any] = d.copy()
-
-    init_args: Dict[str, Any] = {}
-    non_init_args: Dict[str, Any] = {}
-        
-    if drop_extra_fields is None:
-        drop_extra_fields = not getattr(cls, "decode_into_subclasses", False)
-        logger.debug(f"drop_extra_fields is None. Using cls attribute.")
-
-        if cls is FrozenSerializable:
-            # Passing `FrozenSerializable` means that we want to find the right
-            # subclass depending on the keys.
-            # We set the value to False when `FrozenSerializable` is passed, since
-            # we use this mechanism when we don't know which dataclass to use.
-            logger.debug(f"cls is `FrozenSerializable`, drop_extra_fields = False.")
-            drop_extra_fields = False
-
-    logger.debug(f"from_dict for {cls}, drop extra fields: {drop_extra_fields}")
-
-    for field in fields(cls):
-        name = field.name
-        field_type = field.type
-        if name not in obj_dict:
-            if field.metadata.get("to_dict", True) and field.default is MISSING and field.default_factory is MISSING:
-                logger.warning(
-                    f"Couldn't find the field '{name}' in the dict with keys "
-                    f"{list(d.keys())}"
-                )
-            continue
-
-        raw_value = obj_dict.pop(name)
-        field_value = decode_field(field, raw_value)
-
-        if field.init:
-            init_args[name] = field_value
-        else:
-            non_init_args[name] = field_value
-    
-    extra_args = obj_dict
-    
-    # If there are arguments left over in the dict after taking all fields.
-    if extra_args:
-        if drop_extra_fields:
-            logger.warning(f"Dropping extra args {extra_args}")
-            extra_args.clear()
-        
-        elif issubclass(cls, FrozenSerializable):
-            # Use the first FrozenSerializable derived class that has all the required
-            # fields.
-            logger.debug(f"Missing field names: {extra_args.keys()}")
-
-            # Find all the "registered" subclasses of `cls`. (from FrozenSerializable)
-            derived_classes: List[Type[FrozenSerializable]] = []
-            for subclass in FrozenSerializable.subclasses:
-                if issubclass(subclass, cls) and subclass is not cls:
-                    derived_classes.append(subclass)
-            logger.debug(f"All serializable derived classes of {cls} available: {derived_classes}")
-
-            from itertools import chain
-            # All the arguments that the dataclass should be able to accept in
-            # its 'init'.
-            req_init_field_names = set(chain(extra_args, init_args))
-            
-            # Sort the derived classes by their number of init fields, so that
-            # we choose the first one with all the required fields.
-            derived_classes.sort(key=lambda dc: len(get_init_fields(dc)))
-
-            for child_class in derived_classes:
-                logger.debug(f"child class: {child_class.__name__}, mro: {child_class.mro()}") 
-                child_init_fields: Dict[str, Field] = get_init_fields(child_class)
-                child_init_field_names = set(child_init_fields.keys())
-                
-                if child_init_field_names >= req_init_field_names:
-                    # `child_class` is the first class with all required fields.
-                    logger.debug(f"Using class {child_class} instead of {cls}")
-                    return from_dict(child_class, d, drop_extra_fields=False)
-    
-    init_args.update(extra_args)
-    try:
-        instance = cls(**init_args)  # type: ignore
-    except TypeError as e:
-        # raise RuntimeError(f"Couldn't instantiate class {cls} using init args {init_args}.")
-        raise RuntimeError(f"Couldn't instantiate class {cls} using init args {init_args.keys()}: {e}")
-
-    for name, value in non_init_args.items():
-        logger.debug(f"Setting non-init field '{name}' on the instance.")
-        setattr(instance, name, value)
-    return instance
-
-
-def get_key_and_value_types(dict_type: Type[Dict], FrozenSerializable=FrozenSerializable) -> Tuple[Optional[Type], Optional[Type]]:
-    args = get_type_arguments(dict_type)
-
-    if len(args) != 2:
-        logger.debug(f"Weird.. the type {dict_type} doesn't have 2 args: {args}")
-        return None, None
-    K_ = args[0]
-    V_ = args[1]
-    # Get rid of Unions or ForwardRefs or Optionals
-    V_ = get_actual_type(V_)
-
-    logger.debug(f"K_: {K_}, V_: {V_}")
-    if isinstance(V_, tuple):
-        V_ = get_first_non_None_type(V_)
-    elif tpi.is_optional_type(V_):
-        logger.debug(f"V_ is optional: {V_}")
-        V_ = get_first_non_None_type(V_)
-    return K_, V_
-
-
-def get_list_item_type(list_type: Type[List]) -> Optional[Type]:
-    logger.debug(f"list type: {list_type}")
-    args = tpi.get_args(list_type)
-    logger.debug(f"args = {args}")
-    
-    if not args:
-        return None
-
-    assert isinstance(args, tuple), args
-    if isinstance(args[0], tuple):
-        args = args[0]
-    assert isinstance(args, tuple), args
-    logger.debug(f"args tuple: {args}")
-    V_ = get_first_non_None_type(args)
-    logger.debug(f"item type: {V_}")
-    assert V_ is not None
-    V_ = get_actual_type(V_)
-
-    assert not isinstance(V_, tuple), V_
-    return V_
-
-
-def get_init_fields(dataclass: Type) -> Dict[str, Field]:
-    result: Dict[str, Field] = {}
-    for field in fields(dataclass):
-        if field.init:
-            result[field.name] = field
-    return result
-
-
-def get_first_non_None_type(optional_type: Union[Type, Tuple[Type, ...]]) -> Optional[Type]:
-    if not isinstance(optional_type, tuple):
-        optional_type = tpi.get_args(optional_type)
-    for arg in optional_type:
-        if arg is not Union and arg is not type(None):
-            logger.debug(f"arg: {arg} is not union? {arg is not Union}")
-            logger.debug(f"arg is not type(None)? {arg is not type(None)}")
-            return arg
-    return None
-
-
-def is_dataclass_or_optional_dataclass_type(t: Type) -> bool:
-    """ Returns wether `t` is a dataclass type or an Optional[<dataclass type>].
-    """
-    return is_dataclass(t) or (tpi.is_optional_type(t) and
-        is_dataclass(tpi.get_args(t)[0])
-    )
