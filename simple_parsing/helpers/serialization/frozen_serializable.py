@@ -20,7 +20,7 @@ from .encoding import SimpleJsonEncoder, encode
 logger = get_logger(__file__)
 
 Dataclass = TypeVar("Dataclass")
-D = TypeVar("D", bound="Serializable")
+D = TypeVar("D", bound="FrozenSerializable")
 
 try:
     import yaml
@@ -40,16 +40,16 @@ except ImportError:
     pass
 
 
-@dataclass
-class Serializable:
+@dataclass(frozen=True)
+class FrozenSerializable:
     """Makes a dataclass serializable to and from dictionaries.
 
     Supports JSON and YAML files for now.
 
     >>> from dataclasses import dataclass
-    >>> from simple_parsing.helpers import Serializable
-    >>> @dataclass
-    ... class Config(Serializable):
+    >>> from simple_parsing.helpers import FrozenSerializable
+    >>> @dataclass(frozen=True)
+    ... class Config(FrozenSerializable):
     ...   a: int = 123
     ...   b: str = "456"
     ... 
@@ -66,24 +66,24 @@ class Serializable:
     decode_into_subclasses: ClassVar[bool] = False
 
     def __init_subclass__(cls, decode_into_subclasses: bool=None, add_variants: bool=True):
-        logger.debug(f"Registering a new Serializable subclass: {cls}")
+        logger.debug(f"Registering a new FrozenSerializable subclass: {cls}")
         super().__init_subclass__()
         if decode_into_subclasses is None:
             # if decode_into_subclasses is None, we will use the value of the
-            # parent class, if it is also a subclass of Serializable.
+            # parent class, if it is also a subclass of FrozenSerializable.
             # Skip the class itself as well as object.
             parents = cls.mro()[1:-1] 
             logger.debug(f"parents: {parents}")
 
             for parent in parents:
-                if parent in Serializable.subclasses and parent is not Serializable:
+                if parent in FrozenSerializable.subclasses and parent is not FrozenSerializable:
                     decode_into_subclasses = parent.decode_into_subclasses
                     logger.debug(f"Parent class {parent} has decode_into_subclasses = {decode_into_subclasses}")
                     break
 
         cls.decode_into_subclasses = decode_into_subclasses or False
-        if cls not in Serializable.subclasses:
-            Serializable.subclasses.append(cls)
+        if cls not in FrozenSerializable.subclasses:
+            FrozenSerializable.subclasses.append(cls)
 
         encode.register(cls, cls.to_dict)
         register_decoding_fn(cls, cls.from_dict)
@@ -114,12 +114,12 @@ class Serializable:
                 continue
 
             encoding_fn = encode
-            if isinstance(value, Serializable) and recurse:
+            if isinstance(value, FrozenSerializable) and recurse:
                 try:
                     encoded = value.to_dict(dict_factory=dict_factory, recurse=recurse)
                 except TypeError as e:
                     encoded = value.to_dict()
-                logger.debug(f"Encoded Serializable field {name}: {encoded}")
+                logger.debug(f"Encoded FrozenSerializable field {name}: {encoded}")
             else:
                 try:
                     encoded = encoding_fn(value)
@@ -234,7 +234,7 @@ class Serializable:
             raise RuntimeError(
                 f"Unable to determine what function to use in order to load "
                 f"path {path} into a dictionary, since no load_fn was passed, "
-                f"and the path doesn't have an unfamiliar extension.."
+                f"and the path doesn't have a familiar extension.."
             )
 
         if isinstance(path, Path):
@@ -347,34 +347,34 @@ class Serializable:
         return cls.loads(s, drop_extra_fields=drop_extra_fields, load_fn=load_fn, **kwargs)
 
 
-@dataclass
-class SimpleSerializable(Serializable, decode_into_subclasses=True):
+@dataclass(frozen=True)
+class SimpleSerializable(FrozenSerializable, decode_into_subclasses=True):
     pass
 
 
-def get_dataclass_type_from_forward_ref(forward_ref: Type, Serializable=Serializable) -> Optional[Type]:
+def get_dataclass_type_from_forward_ref(forward_ref: Type, FrozenSerializable=FrozenSerializable) -> Optional[Type]:
     arg = tpi.get_forward_arg(forward_ref)
     potential_classes: List[Type] = []
 
-    for serializable_class in Serializable.subclasses:
+    for serializable_class in FrozenSerializable.subclasses:
         if serializable_class.__name__ == arg:
             potential_classes.append(serializable_class)
 
     if not potential_classes:
         logger.warning(
             f"Unable to find a corresponding type for forward ref "
-            f"{forward_ref} inside the registered {Serializable} subclasses. "
-            f"(Consider adding {Serializable} as a base class to <{arg}>? )."
+            f"{forward_ref} inside the registered {FrozenSerializable} subclasses. "
+            f"(Consider adding {FrozenSerializable} as a base class to <{arg}>? )."
         )
         return None
     elif len(potential_classes) > 1:
         logger.warning(
-            f"More than one potential {Serializable} subclass was found for "
+            f"More than one potential {FrozenSerializable} subclass was found for "
             f"forward ref '{forward_ref}'. The appropriate dataclass will be "
             f"selected based on the matching fields. \n"
             f"Potential classes: {potential_classes}"
         )
-        return Serializable
+        return FrozenSerializable
     else:
         assert len(potential_classes) == 1
         return potential_classes[0]
@@ -436,12 +436,12 @@ def from_dict(cls: Type[Dataclass], d: Dict[str, Any], drop_extra_fields: bool=N
         drop_extra_fields = not getattr(cls, "decode_into_subclasses", False)
         logger.debug(f"drop_extra_fields is None. Using cls attribute.")
 
-        if cls is Serializable:
-            # Passing `Serializable` means that we want to find the right
+        if cls is FrozenSerializable:
+            # Passing `FrozenSerializable` means that we want to find the right
             # subclass depending on the keys.
-            # We set the value to False when `Serializable` is passed, since
+            # We set the value to False when `FrozenSerializable` is passed, since
             # we use this mechanism when we don't know which dataclass to use.
-            logger.debug(f"cls is `Serializable`, drop_extra_fields = False.")
+            logger.debug(f"cls is `FrozenSerializable`, drop_extra_fields = False.")
             drop_extra_fields = False
 
     logger.debug(f"from_dict for {cls}, drop extra fields: {drop_extra_fields}")
@@ -473,14 +473,14 @@ def from_dict(cls: Type[Dataclass], d: Dict[str, Any], drop_extra_fields: bool=N
             logger.warning(f"Dropping extra args {extra_args}")
             extra_args.clear()
         
-        elif issubclass(cls, Serializable):
-            # Use the first Serializable derived class that has all the required
+        elif issubclass(cls, FrozenSerializable):
+            # Use the first FrozenSerializable derived class that has all the required
             # fields.
             logger.debug(f"Missing field names: {extra_args.keys()}")
 
-            # Find all the "registered" subclasses of `cls`. (from Serializable)
-            derived_classes: List[Type[Serializable]] = []
-            for subclass in Serializable.subclasses:
+            # Find all the "registered" subclasses of `cls`. (from FrozenSerializable)
+            derived_classes: List[Type[FrozenSerializable]] = []
+            for subclass in FrozenSerializable.subclasses:
                 if issubclass(subclass, cls) and subclass is not cls:
                     derived_classes.append(subclass)
             logger.debug(f"All serializable derived classes of {cls} available: {derived_classes}")
@@ -517,7 +517,7 @@ def from_dict(cls: Type[Dataclass], d: Dict[str, Any], drop_extra_fields: bool=N
     return instance
 
 
-def get_key_and_value_types(dict_type: Type[Dict], Serializable=Serializable) -> Tuple[Optional[Type], Optional[Type]]:
+def get_key_and_value_types(dict_type: Type[Dict], FrozenSerializable=FrozenSerializable) -> Tuple[Optional[Type], Optional[Type]]:
     args = get_type_arguments(dict_type)
 
     if len(args) != 2:

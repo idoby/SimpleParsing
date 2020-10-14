@@ -50,7 +50,7 @@ def decode_field(field: Field, raw_value: Any) -> Any:
     custom_decoding_fn = field.metadata.get("decoding_fn")
     if custom_decoding_fn is not None:
         return custom_decoding_fn(raw_value)
-
+    
     return get_decoding_fn(field_type)(raw_value)
 
 

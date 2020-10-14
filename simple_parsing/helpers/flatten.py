@@ -17,51 +17,35 @@ class FlattenedAccess:
     - The dictionary access syntax is often more natural than using getattr()
         when reading an attribute whose name is a variable.
     """
-    
+
     def attributes(self,
-                   recursive: bool=True,
-                   prefix: str="") -> Iterable[Tuple[str, Any]]:
+                   recursive: bool = True,
+                   prefix: str = "") -> Iterable[Tuple[str, Any]]:
         """Returns an Iterator over the attributes of the dataclass.
-        
+
         [extended_summary]
-        
+
         Parameters
         ----------
-        - dataclass : Dataclass
-        
-            A dataclass type or instance.
         - recursive : bool, optional, by default True
-        
+
             Wether or not to recurse and yield all the elements of the children
             dataclass attributes.
         - prefix : str, optional, by default ""
-        
+
             A prefix to prepend to all the attribute names before yielding them.
-        
+
         Returns
         -------
         Iterable[Tuple[str, Any]]
             An iterable of attribute names and values.
-        
+
         Yields
         -------
         Iterable[Tuple[str, Any]]
             A Tuple of the form <Attribute name, attribute_value>.
         """
-        for field in dataclasses.fields(self):
-            if field.name not in self.__dict__:
-                # the dataclass isn't yet instantiated, or the attr was deleted.
-                continue
-            # get the field value (without needless recursion)
-            field_value = self.__dict__[field.name]
-            
-            yield prefix + field.name, field_value
-            if recursive and dataclasses.is_dataclass(field_value):
-                yield from FlattenedAccess.attributes(
-                    field_value,
-                    recursive=True,
-                    prefix=prefix + field.name + "."
-                )
+        yield from attribute_iterator(self, recursive=recursive, prefix=prefix)
 
     def __getattr__(self, name: str):
         """Retrieves the attribute on self, or recursively on the children.
@@ -78,14 +62,16 @@ class FlattenedAccess:
             # some list of potential parent attributes.
             name_parts = name.split(".")
             dest_parts = attr_name.split(".")
+            
             if dest_parts[-len(name_parts):] == name_parts:
                 parents.append(attr_name)
                 values.append(attr_value)
-        
+
         if not parents:
             raise AttributeError(
                 f"{type(self)} object has no attribute '{name}', "
-                "and neither does any of its children attributes."
+                f"and neither does any of its children attributes. (Available "
+                f"attributes: {dict(self.attributes()).keys()})"
             )
         elif len(parents) > 1:
             raise AttributeError(
@@ -158,3 +144,52 @@ class FlattenedAccess:
     
     def asdict(self) -> Dict:
         return dataclasses.asdict(self)
+
+
+def attribute_iterator(dc,
+                       recursive: bool = True,
+                       prefix: str = "") -> Iterable[Tuple[str, Any]]:
+    """Returns an Iterator over the attributes of the dataclass.
+
+    [extended_summary]
+
+    Parameters
+    ----------
+    - dc : Dataclass
+
+        A dataclass type or instance.
+    - recursive : bool, optional, by default True
+
+        Wether or not to recurse and yield all the elements of the children
+        dataclass attributes.
+    - prefix : str, optional, by default ""
+
+        A prefix to prepend to all the attribute names before yielding them.
+
+    Returns
+    -------
+    Iterable[Tuple[str, Any]]
+        An iterable of attribute names and values.
+
+    Yields
+    -------
+    Iterable[Tuple[str, Any]]
+        A Tuple of the form <Attribute name, attribute_value>.
+    """
+    for field in dataclasses.fields(dc):
+        if field.name not in dc.__dict__:
+            # the dataclass isn't yet instantiated, or the attr was deleted.
+            continue
+
+        # get the field value (without needless recursion)
+        field_value = dc.__dict__[field.name]
+        
+        yield prefix + field.name, field_value
+        
+        if recursive and dataclasses.is_dataclass(field_value):
+            # use the function in a 'static' way.
+            yield from attribute_iterator(
+                field_value,
+                recursive=True,
+                prefix=prefix + field.name + "."
+            )
