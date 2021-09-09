@@ -1,55 +1,10 @@
 from argparse import Namespace
-from typing import Any, Callable, Dict, Iterable, List, Sequence, Type, TypeVar, Union
+from typing import Dict, Type
 from simple_parsing import ArgumentParser
 from simple_parsing.utils import Dataclass
 from dataclasses import dataclass
 import copy
 import sys
-
-
-def add_subparsers(
-    parser: ArgumentParser,
-    title: str,
-    name_to_type: Dict[str, Type[Dataclass]],
-    dest: str = None,
-    metavar: str = None,
-    required: bool = True,
-    name_to_help: Dict[str, str] = None,
-) -> Dict[str, ArgumentParser]:
-    # Dict to be returned.
-    subparsers: Dict[str, ArgumentParser] = {}
-
-    # Keyword for the `add_subparsers` function, which differ a bit based on the version of python.
-    kwargs = dict(title=title, dest=dest or "", metavar=metavar)
-    if sys.version_info >= (3, 7):
-        kwargs["required"] = required
-    subparser = parser.add_subparsers(**kwargs)
-
-    for name, type in name_to_type.items():
-        dest = dest or title
-        help = name_to_help[name] if name_to_help else type.__doc__
-        description = f"FIXME: Description for {type}: {type.__doc__}"
-        type_parser: ArgumentParser = subparser.add_parser(name, help=help, description=description)
-
-        # NOTE: If we wanted to give access to the 'context' when adding arguments for this
-        # subparser, we could do this here like so:
-        # type_parser._parent = parser
-        #
-        # def get_parents(parser: ArgumentParser) -> List[ArgumentParser]:
-        #     parents = []
-        #     while hasattr(parser, "_parent"):
-        #         parents.append(parser._parent)
-        #         parser = parser._parent
-        #     parents.reverse()
-        #     return parents
-        #         type_parser.add_arguments(type, dest=dest)
-        #         subparsers[name] = type_parser
-        #     return subparsers
-        #
-        # parsers = get_parents(type_parser) + [type_parser]
-        # context = sum([[w.dataclass.__qualname__ for w in p._wrappers] for p in parsers], [])
-        # def add_arguments_fn(parser: ArgumentParser, type: Type[Dataclass], dest: str, context: Any) -> None:
-        #     parser.add_arguments(type, dest=dest)
 
 
 @dataclass
@@ -121,6 +76,39 @@ class Claire(Person):
     foo_claire: int = 1
 
 
+def add_subparsers(
+    parser: ArgumentParser,
+    title: str,
+    name_to_type: Dict[str, Type[Dataclass]],
+    dest: str = None,
+    metavar: str = None,
+    required: bool = True,
+) -> Dict[str, ArgumentParser]:
+    """ Add subparsers to the given parser, one per dataclass type. """
+    # Dict to be returned.
+    subparsers: Dict[str, ArgumentParser] = {}
+
+    # Keyword for the `add_subparsers` function, which differ a bit based on the version of python.
+    kwargs = dict(title=title, dest=dest or "", metavar=metavar)
+    if sys.version_info >= (3, 7):
+        kwargs["required"] = required
+    subparser = parser.add_subparsers(**kwargs)
+
+    for name, type in name_to_type.items():
+        dest = dest or title
+        # NOTE: Could perhaps do something smarter than this.
+        help = next(line for line in type.__doc__.splitlines() if not line.isspace())
+        description = type.__doc__
+        type_parser: ArgumentParser = subparser.add_parser(
+            name,
+            help=help,
+            description=description,
+        )
+        type_parser.add_arguments(type, dest=dest)
+        subparsers[name] = type_parser
+    return subparsers
+
+
 def main_simple_example():
     parser = ArgumentParser("demo")
 
@@ -144,17 +132,18 @@ def main_simple_example():
 
     args = parser.parse_args()
 
-    # post-processing:
-    if isinstance(args.temp, tuple(letters.values())):
+    # post-processing: Rearrange the arguments.
+    if isinstance(args.temp, Letter):
         args.letter = args.temp
         delattr(args, "temp")
-    elif isinstance(args.temp, tuple(persons.values())):
+    elif isinstance(args.temp, Person):
         args.person = args.temp
         delattr(args, "temp")
-    else:
-        assert False, args
 
     print(args)
+
+
+# ---------- Now: onto something a bit more challenging: What if we add a third group? ------------
 
 
 @dataclass
@@ -189,7 +178,7 @@ def main_complicated():
     """ More complicated demo that works with any number of groups of subparsers."""
     parser = ArgumentParser("demo_complicated")
 
-    postprocessing_fn = independant_subparsers(
+    add_independent_subparsers(
         parser,
         letter={"a": A, "b": B, "c": C},
         person={"bob": Bob, "claire": Claire, "alice": Alice},
@@ -197,19 +186,15 @@ def main_complicated():
     )
 
     args = parser.parse_args()
-
-    # Postprocessing: need to move the values from their placeholder dests to their intended dests.
-    # args = postprocessing_fn(args)
-
     print(args)
 
 
-def independant_subparsers(
+def add_independent_subparsers(
     parser: ArgumentParser,
     _level: int = 0,
     **group_name_to_subparser_dict: Dict[str, Type[Dataclass]],
-) -> Callable[[Namespace], Namespace]:
-    """Add multiple independant subparsers to the given parser.
+) -> None:
+    """Add multiple independent subparsers to the given parser.
 
     This works by adding subparsers in a hierarchical fashion.
 
@@ -218,13 +203,15 @@ def independant_subparsers(
     if not group_name_to_subparser_dict:
         raise ValueError("Need non-empty mapping from group name to subparser types.")
 
+    # TODO: Leaving the 'optional multiple subparsers' feature for future work.
+    required: bool = True
+
     n_groups = len(group_name_to_subparser_dict)
 
     title = " or ".join(group_name_to_subparser_dict.keys())
     metavar = "|".join(
         f"<{group_name}>"
-        # f"<{group_name}>:" + "{" + ",".join(names_to_types.keys()) + "}"
-        for group_name, names_to_types in group_name_to_subparser_dict.items()
+        for group_name in group_name_to_subparser_dict.keys()
     )
 
     # Get a dict with the types of each subparser for the "first" command.
@@ -241,6 +228,7 @@ def independant_subparsers(
         name_to_type=name_to_type,
         metavar=metavar,
         dest=f"command_{_level}",
+        required=required,
     )
 
     # There are other subparser groups for which we haven't yet added subparsers for: recurse!
@@ -257,7 +245,7 @@ def independant_subparsers(
                 if rest:
                     # NOTE: We don't use the result of this recursive call, because the
                     # postprocessing_fn below handles all those.
-                    _ = independant_subparsers(child_parser, **rest, _level=_level + 1)
+                    _ = add_independent_subparsers(child_parser, **rest, _level=_level + 1)
 
     def postprocessing_fn(args: Namespace, inplace: bool = False) -> Namespace:
         """Function to be applied to the args after they are parsed to fix the arguments being at
@@ -267,7 +255,13 @@ def independant_subparsers(
             args = copy.deepcopy(args)
 
         for level in range(n_groups):
+            
             # Extract the destination and delete that temporary attribute.
+            if not required:
+                # TODO: The attribute might not be there, in which case we can skip this?
+                if not hasattr(args, f"command_{level}_dest"):
+                    continue
+
             command_dest = getattr(args, f"command_{level}_dest")
             delattr(args, f"command_{level}_dest")
 
@@ -286,9 +280,16 @@ def independant_subparsers(
         return args
 
     if _level == 0:
-        _original = parser.parse_args
-        parser.parse_args = lambda *args, **kwargs: postprocessing_fn(_original(*args, **kwargs))
-    return postprocessing_fn
+        # NOTE: A bit hacky, but keeps the API the same and makes it very convenient!
+        # If at the 'root' level, then we modify the parser in-place to avoid having to call
+        # the postprocessing_fn manually:
+        _parse_known_args = parser.parse_known_args
+
+        def _wrapped_parse_known_args(*args, **kwargs):
+            args, extra_args = _parse_known_args(*args, **kwargs)
+            return postprocessing_fn(args), extra_args
+
+        parser.parse_known_args = _wrapped_parse_known_args
 
 
 if __name__ == "__main__":
